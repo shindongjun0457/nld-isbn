@@ -8,55 +8,43 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname !== "/api/isbn") {
-      return new Response(JSON.stringify({ ok: false, error: "Not Found" }), {
-        status: 404,
-        headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders() },
-      });
+      return json({ ok: false, error: "Not Found" }, 404);
     }
 
     if (request.method !== "POST") {
-      return new Response(JSON.stringify({ ok: false, error: "Method Not Allowed" }), {
-        status: 405,
-        headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders() },
-      });
+      return json({ ok: false, error: "Method Not Allowed" }, 405);
     }
 
     if (!env.NLD_CERT_KEY) {
-      return new Response(JSON.stringify({ ok: false, error: "Server missing NLD_CERT_KEY secret" }), {
-        status: 500,
-        headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders() },
-      });
+      return json({ ok: false, error: "Server missing NLD_CERT_KEY secret" }, 500);
     }
 
     let body;
     try {
       body = await request.json();
     } catch {
-      return new Response(JSON.stringify({ ok: false, error: "Invalid JSON body" }), {
-        status: 400,
-        headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders() },
-      });
+      return json({ ok: false, error: "Invalid JSON body" }, 400);
     }
 
     const isbns = Array.isArray(body?.isbns) ? body.isbns : null;
     if (!isbns) {
-      return new Response(JSON.stringify({ ok: false, error: "Body must be { isbns: string[] }" }), {
-        status: 400,
-        headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders() },
-      });
+      return json({ ok: false, error: "Body must be { isbns: string[] }" }, 400);
     }
 
-    // 최대 500개 제한 (프론트도 제한하지만 서버에서도 보강)
-    const trimmed = isbns.slice(0, 500);
+    // 최대 500개 제한(서버 보강)
+    const input = isbns.slice(0, 500);
 
-    // 중복 제거는 하지 않음.
-    // 대신 같은 ISBN은 "첫 조회 결과" Promise/결과를 재사용해서 네트워크 호출을 줄임.
-    const inBatchCache = new Map(); // normIsbn -> Promise<rowBase>
-    const concurrency = clampInt(body?.concurrency, 1, 15, 8);
+    // ✅ 중복 제거하지 않음(행 유지).
+    // ✅ 다만 같은 ISBN은 "첫 조회 결과"를 재사용해 외부 API 호출량을 줄임.
+    const inBatchCache = new Map(); // normIsbn -> Promise<rowObject>
 
-    const tasks = trimmed.map((rawIsbn, idx) => async () => {
+    // ✅ 동시성 제한: 기본 6 (45개 이상에서도 안정적으로)
+    const concurrency = clampInt(body?.concurrency, 1, 10, 6);
+
+    const tasks = input.map((rawIsbn, idx) => async () => {
       const norm = normalizeIsbn(rawIsbn);
-      // 입력값이 비어있거나 형식이 이상하면 즉시 반환
+
+      // 형식 검증
       if (!norm) {
         return makeRow({
           isbn: String(rawIsbn ?? ""),
@@ -64,7 +52,6 @@ export default {
           author: "",
           publisher: "",
           year: "",
-          found: false,
           status: "형식오류",
           note: "빈 값 또는 ISBN 형식이 아님",
         });
@@ -76,29 +63,28 @@ export default {
           author: "",
           publisher: "",
           year: "",
-          found: false,
           status: "형식오류",
           note: "ISBN은 숫자 10자리 또는 13자리여야 함",
         });
       }
 
-      // 배치 내 중복: 첫 조회 결과 재사용 (행은 그대로 유지)
+      // 배치 내 동일 ISBN은 첫 조회 결과 재사용
       if (!inBatchCache.has(norm)) {
         inBatchCache.set(norm, fetchFromNldOrCache(norm, env, ctx));
       }
-      const base = await inBatchCache.get(norm);
 
-      // base는 첫 조회 결과 (성공/미검색/실패)를 담고 있음
-      // 중복인 경우 비고만 추가 (첫 등장 index가 아니라면)
-      const isDuplicate = firstIndexOfNormalized(trimmed, norm) !== idx;
+      const baseRow = await inBatchCache.get(norm);
+
+      // 중복 행은 유지하되, 비고에 재사용 표시(원치 않으면 이 블록 삭제 가능)
+      const isDuplicate = firstIndexOfNormalized(input, norm) !== idx;
       if (isDuplicate) {
-        return {
-          ...base,
-          isbn: norm,
-          note: base.note ? `${base.note} | 중복: 이전 조회 결과 재사용` : "중복: 이전 조회 결과 재사용",
-        };
+        const note = baseRow["비고"]
+          ? `${baseRow["비고"]} | 중복: 이전 조회 결과 재사용`
+          : "중복: 이전 조회 결과 재사용";
+        return { ...baseRow, isbn: norm, "비고": note };
       }
-      return { ...base, isbn: norm };
+
+      return { ...baseRow, isbn: norm };
     });
 
     const results = await runPool(tasks, concurrency);
@@ -111,10 +97,7 @@ export default {
       invalid: results.filter((r) => r["조회결과"] === "형식오류").length,
     };
 
-    return new Response(JSON.stringify({ ok: true, results, summary }), {
-      status: 200,
-      headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders() },
-    });
+    return json({ ok: true, results, summary }, 200);
   },
 };
 
@@ -124,6 +107,16 @@ function corsHeaders() {
     "access-control-allow-methods": "POST, OPTIONS",
     "access-control-allow-headers": "content-type",
   };
+}
+
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      ...corsHeaders(),
+    },
+  });
 }
 
 function normalizeIsbn(v) {
@@ -138,20 +131,20 @@ function clampInt(v, min, max, def) {
   return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
-function makeRow({ isbn, title, author, publisher, year, found, status, note }) {
+function makeRow({ isbn, title, author, publisher, year, status, note }) {
   const authorDisplay = formatAuthorDisplay(author);
   const titleAuthor = title
     ? `${title}(${authorDisplay || "저자미상"})`
-    : `(${authorDisplay || "저자미상"})`;
+    : "";
 
   return {
-    "isbn": isbn ?? "",
+    isbn: isbn ?? "",
     "도서명": title ?? "",
     "저자명": author ?? "",
-    "도서명(저자명)": title ? `${title}(${authorDisplay || "저자미상"})` : "",
+    "도서명(저자명)": titleAuthor,
     "출판사": publisher ?? "",
     "발행년도": year ?? "",
-    "조회결과": status ?? (found ? "성공" : "미검색"),
+    "조회결과": status ?? "미검색",
     "비고": note ?? "",
   };
 }
@@ -163,27 +156,25 @@ function formatAuthorDisplay(authorRaw) {
   const raw = String(authorRaw ?? "").trim();
   if (!raw) return "";
 
-  // 흔한 구분자 기준으로 분해
+  // 흔한 구분자 기준
   const parts = raw.split(/[;|,]/).map((p) => p.trim()).filter(Boolean);
 
-  // 첫 저자명 추출(예: "지은이: 히가시노 게이고" -> "히가시노 게이고")
+  // "지은이: ..." 같은 형태 보정
   const first = (parts[0] ?? raw).split(":").pop().trim();
 
-  const multiple = parts.length >= 2;
-  return multiple ? `${first} 외` : first;
+  return parts.length >= 2 ? `${first} 외` : first;
 }
 
-function extractYearFromDate8(date8) {
-  const s = String(date8 ?? "").trim();
-  // PUBLISH_PREDATE는 8자리(yyyymmdd)로 안내됨 :contentReference[oaicite:1]{index=1}
-  if (/^\d{8}$/.test(s)) return s.slice(0, 4);
-  if (/^\d{4}$/.test(s)) return s;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s.slice(0, 4);
+function extractYear(dateLike) {
+  const s = String(dateLike ?? "").trim();
+  if (/^\d{8}$/.test(s)) return s.slice(0, 4);         // yyyymmdd
+  if (/^\d{4}$/.test(s)) return s;                     // yyyy
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s.slice(0, 4); // yyyy-mm-dd
   return "";
 }
 
 async function fetchFromNldOrCache(normIsbn, env, ctx) {
-  // Cloudflare cache (영속 캐시: 동일 ISBN 재조회 시 속도/호출량 절감)
+  // Cloudflare cache (동일 ISBN 재조회 최적화)
   const cacheKey = new Request(`https://cache.local/isbn/${normIsbn}`, { method: "GET" });
   const cached = await caches.default.match(cacheKey);
   if (cached) {
@@ -191,95 +182,121 @@ async function fetchFromNldOrCache(normIsbn, env, ctx) {
     return makeRow(data);
   }
 
-  try {
-    const apiUrl = new URL("https://www.nl.go.kr/seoji/SearchApi.do");
-    apiUrl.searchParams.set("cert_key", env.NLD_CERT_KEY);
-    apiUrl.searchParams.set("result_style", "json");
-    apiUrl.searchParams.set("page_no", "1");
-    apiUrl.searchParams.set("page_size", "1");
-    apiUrl.searchParams.set("isbn", normIsbn);
+  const apiUrl = new URL("https://www.nl.go.kr/seoji/SearchApi.do");
+  apiUrl.searchParams.set("cert_key", env.NLD_CERT_KEY);
+  apiUrl.searchParams.set("result_style", "json");
+  apiUrl.searchParams.set("page_no", "1");
+  apiUrl.searchParams.set("page_size", "1");
+  apiUrl.searchParams.set("isbn", normIsbn);
 
-    const res = await fetch(apiUrl.toString(), {
-      headers: { "accept": "application/json" },
-    });
+  // ✅ 타임아웃+재시도 적용(핵심)
+  const res = await fetchWithRetry(apiUrl.toString(), { headers: { accept: "application/json" } }, 5000, 1);
 
-    if (!res.ok) {
-      const text = await safeText(res);
-      const rowBase = {
-        isbn: normIsbn,
-        title: "",
-        author: "",
-        publisher: "",
-        year: "",
-        found: false,
-        status: "실패",
-        note: `API 응답 오류: HTTP ${res.status}${text ? ` (${text.slice(0, 120)})` : ""}`,
-      };
-      return makeRow(rowBase);
-    }
-
-    const json = await res.json();
-
-    // json 구조: docs 배열(공식 출력 항목에서 docs가 등장) :contentReference[oaicite:2]{index=2}
-    const docs = Array.isArray(json?.docs) ? json.docs : [];
-    const total = String(json?.TOTAL_COUNT ?? json?.totalCount ?? "").trim();
-
-    if (!docs.length || total === "0") {
-      const rowBase = {
-        isbn: normIsbn,
-        title: "",
-        author: "",
-        publisher: "",
-        year: "",
-        found: false,
-        status: "미검색",
-        note: "",
-      };
-      // 캐시 저장
-      ctx.waitUntil(putCache(cacheKey, rowBase));
-      return makeRow(rowBase);
-    }
-
-    const d = docs[0] ?? {};
-    // 출력 필드: TITLE, AUTHOR, PUBLISHER, PUBLISH_PREDATE 등 :contentReference[oaicite:3]{index=3}
-    const title = String(d.TITLE ?? d.title ?? "").trim();
-    const author = String(d.AUTHOR ?? d.author ?? "").trim();
-    const publisher = String(d.PUBLISHER ?? d.publisher ?? "").trim();
-
-    // 발행년도: PUBLISH_PREDATE(출판예정일) 기준으로 연도 추출.
-    // 일부 케이스에서 REAL_PUBLISH_DATE 등이 있을 수 있어 보강.
-    const year =
-      extractYearFromDate8(d.PUBLISH_PREDATE) ||
-      extractYearFromDate8(d.REAL_PUBLISH_DATE) ||
-      "";
-
-    const rowBase = {
-      isbn: normIsbn,
-      title,
-      author,
-      publisher,
-      year,
-      found: Boolean(title || author || publisher),
-      status: (title || author || publisher) ? "성공" : "미검색",
-      note: "",
-    };
-
-    // 캐시 저장(예: 30일)
-    ctx.waitUntil(putCache(cacheKey, rowBase, 60 * 60 * 24 * 30));
-    return makeRow(rowBase);
-  } catch (e) {
-    const rowBase = {
+  if (!res.ok) {
+    const text = await safeText(res);
+    const base = {
       isbn: normIsbn,
       title: "",
       author: "",
       publisher: "",
       year: "",
-      found: false,
       status: "실패",
-      note: `예외: ${String(e?.message ?? e).slice(0, 200)}`,
+      note: `API 응답 오류: HTTP ${res.status}${text ? ` (${text.slice(0, 120)})` : ""}`,
     };
-    return makeRow(rowBase);
+    return makeRow(base);
   }
+
+  let jsonData;
+  try {
+    jsonData = await res.json();
+  } catch (e) {
+    const base = {
+      isbn: normIsbn,
+      title: "",
+      author: "",
+      publisher: "",
+      year: "",
+      status: "실패",
+      note: "API JSON 파싱 실패",
+    };
+    return makeRow(base);
+  }
+
+  const docs = Array.isArray(jsonData?.docs) ? jsonData.docs : [];
+  const total = String(jsonData?.TOTAL_COUNT ?? jsonData?.totalCount ?? "").trim();
+
+  if (!docs.length || total === "0") {
+    const base = {
+      isbn: normIsbn,
+      title: "",
+      author: "",
+      publisher: "",
+      year: "",
+      status: "미검색",
+      note: "",
+    };
+    ctx.waitUntil(putCache(cacheKey, base));
+    return makeRow(base);
+  }
+
+  const d = docs[0] ?? {};
+  const title = String(d.TITLE ?? d.title ?? "").trim();
+  const author = String(d.AUTHOR ?? d.author ?? "").trim();
+  const publisher = String(d.PUBLISHER ?? d.publisher ?? "").trim();
+
+  // 발행년도: PUBLISH_PREDATE 우선, 없으면 대체 필드 보강
+  const year =
+    extractYear(d.PUBLISH_PREDATE) ||
+    extractYear(d.REAL_PUBLISH_DATE) ||
+    extractYear(d.PUBLISH_DATE) ||
+    "";
+
+  const ok = Boolean(title || author || publisher);
+
+  const base = {
+    isbn: normIsbn,
+    title,
+    author,
+    publisher,
+    year,
+    status: ok ? "성공" : "미검색",
+    note: "",
+  };
+
+  ctx.waitUntil(putCache(cacheKey, base, 60 * 60 * 24 * 30)); // 30일
+  return makeRow(base);
+}
+
+async function fetchWithRetry(url, options, timeoutMs, retryCount = 1) {
+  // 1회 + retryCount회(예: 1) = 최대 2회 시도
+  let lastErr;
+  for (let attempt = 0; attempt <= retryCount; attempt++) {
+    try {
+      const res = await fetchWithTimeout(url, options, timeoutMs);
+      return res;
+    } catch (e) {
+      lastErr = e;
+      // 짧은 backoff (200ms, 400ms ...)
+      await sleep(200 * Math.pow(2, attempt));
+    }
+  }
+  // 여기까지 왔다는 건 fetch 자체가 실패(연결/타임아웃)
+  throw lastErr;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 async function safeText(res) {
@@ -290,8 +307,8 @@ async function safeText(res) {
   }
 }
 
-async function putCache(cacheKey, rowBase, maxAgeSeconds = 60 * 60 * 24 * 30) {
-  const resp = new Response(JSON.stringify(rowBase), {
+async function putCache(cacheKey, base, maxAgeSeconds = 60 * 60 * 24 * 30) {
+  const resp = new Response(JSON.stringify(base), {
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": `public, max-age=${maxAgeSeconds}`,
@@ -307,7 +324,7 @@ function firstIndexOfNormalized(list, normIsbn) {
   return -1;
 }
 
-// 동시성 제한 실행기
+// ✅ 동시성 제한 실행기
 async function runPool(taskFns, limit) {
   const results = new Array(taskFns.length);
   let i = 0;
