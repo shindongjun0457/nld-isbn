@@ -132,38 +132,37 @@
     }
 
     btnLookup.addEventListener("click", async () => {
-      const all = parseIsbns(elInput.value);
-      const isbns = all.slice(0, 500);
+      const chunkSize = 25;  // ✅ 25개씩
+const all = parseIsbns(elInput.value).slice(0, 500);
 
-      if (isbns.length === 0) return;
+const chunks = [];
+for (let i = 0; i < all.length; i += chunkSize) {
+  chunks.push(all.slice(i, i + chunkSize));
+}
 
-      btnLookup.disabled = true;
-      btnDownload.disabled = true;
-      elProgress.textContent = "조회 중...";
-      elSummary.innerHTML = "";
-      renderTable([]);
+lastResults = [];
+renderTable([]);
+renderSummary(null);
 
-      try {
-        const res = await fetch(API_ENDPOINT, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ isbns })
-        });
+for (let ci = 0; ci < chunks.length; ci++) {
+  elProgress.textContent = `조회 중... (${ci + 1}/${chunks.length})`;
 
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error || "unknown error");
+  const res = await fetch(API_ENDPOINT, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ isbns: chunks[ci] })
+  });
 
-        lastResults = data.results || [];
-        renderTable(lastResults);
-        renderSummary(data.summary);
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "unknown error");
 
-        btnDownload.disabled = lastResults.length === 0;
-        elProgress.textContent = "완료";
-      } catch (e) {
-        elProgress.textContent = "오류";
-        alert(`조회 실패: ${e.message || e}`);
-      } finally {
-        btnLookup.disabled = false;
+  // ✅ 결과 이어붙이기(행 순서 유지)
+  lastResults = lastResults.concat(data.results || []);
+  renderTable(lastResults);
+}
+
+elProgress.textContent = "완료";
+btnDownload.disabled = lastResults.length === 0;
       }
     });
 
