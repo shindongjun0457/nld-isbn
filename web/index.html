@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ISBN 서지정보 조회 (국립중앙도서관)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; margin: 24px; }
+    h1 { margin: 0 0 12px; font-size: 20px; }
+    .help { color: #444; margin-bottom: 12px; }
+    textarea { width: 100%; height: 180px; padding: 10px; box-sizing: border-box; }
+    .row { display: flex; gap: 8px; align-items: center; margin: 10px 0 16px; flex-wrap: wrap; }
+    button { padding: 8px 12px; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .badge { padding: 6px 10px; border: 1px solid #ccc; border-radius: 999px; }
+    .warn { color: #b00020; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #ddd; padding: 8px; vertical-align: top; font-size: 13px; }
+    th { background: #f6f6f6; text-align: left; position: sticky; top: 0; }
+    .footer { margin-top: 10px; color: #666; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>ISBN 서지정보 조회</h1>
+  <div class="help">
+    ISBN을 줄바꿈으로 여러 개 입력하세요. <b>한 번에 최대 500개</b>까지 처리됩니다.
+  </div>
+
+  <textarea id="input" placeholder="예)
+9788972598435
+9791189799908
+..."></textarea>
+
+  <div class="row">
+    <button id="btnLookup">조회</button>
+    <button id="btnDownload" disabled>엑셀 다운로드</button>
+    <button id="btnClear">초기화</button>
+    <span class="badge" id="countBadge">0개</span>
+    <span class="badge" id="progressBadge">대기</span>
+    <span class="warn" id="warnText"></span>
+  </div>
+
+  <div id="summary"></div>
+
+  <div style="overflow:auto; max-height: 60vh;">
+    <table id="table">
+      <thead>
+        <tr>
+          <th>isbn</th>
+          <th>도서명</th>
+          <th>저자명</th>
+          <th>도서명(저자명)</th>
+          <th>출판사</th>
+          <th>발행년도</th>
+          <th>조회결과</th>
+          <th>비고</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="footer">
+    백엔드(Worker)에서만 국립중앙도서관 API를 호출합니다. 프론트에는 인증키가 포함되지 않습니다.
+  </div>
+
+  <!-- SheetJS (xlsx) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <script>
+    // ====== 설정 ======
+    // 로컬 개발: wrangler dev가 8787이면 아래를 "http://127.0.0.1:8787/api/isbn"
+    // 배포 후: Worker 도메인으로 바꾸세요.
+    let API_ENDPOINT = "http://127.0.0.1:8787/api/isbn";
+
+
+    const elInput = document.getElementById("input");
+    const elCount = document.getElementById("countBadge");
+    const elProgress = document.getElementById("progressBadge");
+    const elWarn = document.getElementById("warnText");
+    const elSummary = document.getElementById("summary");
+    const elTbody = document.querySelector("#table tbody");
+    const btnLookup = document.getElementById("btnLookup");
+    const btnDownload = document.getElementById("btnDownload");
+    const btnClear = document.getElementById("btnClear");
+
+    let lastResults = [];
+
+    function parseIsbns(text) {
+      // 줄바꿈/쉼표/공백 혼합 허용
+      const raw = text.split(/\s+|,/g).map(s => s.trim()).filter(Boolean);
+      return raw;
+    }
+
+    function updateCount() {
+      const list = parseIsbns(elInput.value);
+      elCount.textContent = `${list.length}개`;
+      elWarn.textContent = list.length > 500 ? `500개를 초과했습니다. 앞의 500개만 처리됩니다. (현재 ${list.length}개)` : "";
+    }
+
+    elInput.addEventListener("input", updateCount);
+    updateCount();
+
+    function renderTable(rows) {
+      elTbody.innerHTML = "";
+      const frag = document.createDocumentFragment();
+      for (const r of rows) {
+        const tr = document.createElement("tr");
+        const cols = ["isbn","도서명","저자명","도서명(저자명)","출판사","발행년도","조회결과","비고"];
+        for (const c of cols) {
+          const td = document.createElement("td");
+          td.textContent = r[c] ?? "";
+          tr.appendChild(td);
+        }
+        frag.appendChild(tr);
+      }
+      elTbody.appendChild(frag);
+    }
+
+    function renderSummary(summary) {
+      if (!summary) { elSummary.innerHTML = ""; return; }
+      elSummary.innerHTML = `
+        <div class="row" style="margin: 0 0 8px;">
+          <span class="badge">총 ${summary.total}건</span>
+          <span class="badge">성공 ${summary.success}</span>
+          <span class="badge">미검색 ${summary.notFound}</span>
+          <span class="badge">실패 ${summary.failed}</span>
+          <span class="badge">형식오류 ${summary.invalid}</span>
+        </div>
+      `;
+    }
+
+    btnLookup.addEventListener("click", async () => {
+      const all = parseIsbns(elInput.value);
+      const isbns = all.slice(0, 500);
+
+      if (isbns.length === 0) return;
+
+      btnLookup.disabled = true;
+      btnDownload.disabled = true;
+      elProgress.textContent = "조회 중...";
+      elSummary.innerHTML = "";
+      renderTable([]);
+
+      try {
+        const res = await fetch(API_ENDPOINT, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ isbns })
+        });
+
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "unknown error");
+
+        lastResults = data.results || [];
+        renderTable(lastResults);
+        renderSummary(data.summary);
+
+        btnDownload.disabled = lastResults.length === 0;
+        elProgress.textContent = "완료";
+      } catch (e) {
+        elProgress.textContent = "오류";
+        alert(`조회 실패: ${e.message || e}`);
+      } finally {
+        btnLookup.disabled = false;
+      }
+    });
+
+    btnDownload.addEventListener("click", () => {
+      if (!lastResults || lastResults.length === 0) return;
+
+      const cols = ["isbn","도서명","저자명","도서명(저자명)","출판사","발행년도","조회결과","비고"];
+      const rows = lastResults.map(r => {
+        const o = {};
+        for (const c of cols) o[c] = r[c] ?? "";
+        return o;
+      });
+
+      const ws = XLSX.utils.json_to_sheet(rows, { header: cols });
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "결과");
+
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth()+1).padStart(2,"0");
+      const dd = String(today.getDate()).padStart(2,"0");
+      XLSX.writeFile(wb, `isbn_도서목록_${yyyy}-${mm}-${dd}.xlsx`);
+    });
+
+    btnClear.addEventListener("click", () => {
+      elInput.value = "";
+      updateCount();
+      lastResults = [];
+      renderTable([]);
+      renderSummary(null);
+      btnDownload.disabled = true;
+      elProgress.textContent = "대기";
+    });
+  </script>
+</body>
+</html>
