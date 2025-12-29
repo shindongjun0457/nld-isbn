@@ -7,7 +7,7 @@
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; margin: 24px; }
     h1 { margin: 0 0 12px; font-size: 20px; }
-    .help { color: #444; margin-bottom: 12px; }
+    .help { color: #444; margin-bottom: 12px; line-height: 1.5; }
     textarea { width: 100%; height: 180px; padding: 10px; box-sizing: border-box; }
     .row { display: flex; gap: 8px; align-items: center; margin: 10px 0 16px; flex-wrap: wrap; }
     button { padding: 8px 12px; cursor: pointer; }
@@ -18,12 +18,14 @@
     th, td { border: 1px solid #ddd; padding: 8px; vertical-align: top; font-size: 13px; }
     th { background: #f6f6f6; text-align: left; position: sticky; top: 0; }
     .footer { margin-top: 10px; color: #666; font-size: 12px; }
+    .muted { color:#666; font-size:12px; }
   </style>
 </head>
 <body>
   <h1>ISBN 서지정보 조회</h1>
   <div class="help">
-    ISBN을 줄바꿈으로 여러 개 입력하세요. <b>한 번에 최대 500개</b>까지 처리됩니다.
+    ISBN을 줄바꿈으로 여러 개 입력하세요. <b>한 번에 최대 500개</b>까지 처리됩니다.<br />
+    대량 조회 안정화를 위해 <b>25개씩 분할</b>해 순차 조회합니다.
   </div>
 
   <textarea id="input" placeholder="예)
@@ -41,6 +43,7 @@
   </div>
 
   <div id="summary"></div>
+  <div class="muted" id="detail"></div>
 
   <div style="overflow:auto; max-height: 60vh;">
     <table id="table">
@@ -69,34 +72,42 @@
 
   <script>
     // ====== 설정 ======
-    // 로컬 개발: wrangler dev가 8787이면 아래를 "http://127.0.0.1:8787/api/isbn"
-    // 배포 후: Worker 도메인으로 바꾸세요.
+    // 배포된 Worker API로 고정 (필요 시 본인 URL로 변경)
     let API_ENDPOINT = "https://nld-isbn-lookup.djshin0457.workers.dev/api/isbn";
 
-
+    // 대량 조회 안정화 파라미터
+    const MAX_ISBNS = 500;
+    const CHUNK_SIZE = 25;        // 25개씩 분할 호출
+    const CHUNK_TIMEOUT_MS = 20000; // 각 chunk 요청 20초 제한 (멈춤 방지)
 
     const elInput = document.getElementById("input");
     const elCount = document.getElementById("countBadge");
     const elProgress = document.getElementById("progressBadge");
     const elWarn = document.getElementById("warnText");
     const elSummary = document.getElementById("summary");
+    const elDetail = document.getElementById("detail");
     const elTbody = document.querySelector("#table tbody");
     const btnLookup = document.getElementById("btnLookup");
     const btnDownload = document.getElementById("btnDownload");
     const btnClear = document.getElementById("btnClear");
 
     let lastResults = [];
+    let isRunning = false;
 
     function parseIsbns(text) {
       // 줄바꿈/쉼표/공백 혼합 허용
-      const raw = text.split(/\s+|,/g).map(s => s.trim()).filter(Boolean);
-      return raw;
+      return text
+        .split(/\s+|,/g)
+        .map(s => s.trim())
+        .filter(Boolean);
     }
 
     function updateCount() {
       const list = parseIsbns(elInput.value);
       elCount.textContent = `${list.length}개`;
-      elWarn.textContent = list.length > 500 ? `500개를 초과했습니다. 앞의 500개만 처리됩니다. (현재 ${list.length}개)` : "";
+      elWarn.textContent = list.length > MAX_ISBNS
+        ? `${MAX_ISBNS}개를 초과했습니다. 앞의 ${MAX_ISBNS}개만 처리됩니다. (현재 ${list.length}개)`
+        : "";
     }
 
     elInput.addEventListener("input", updateCount);
@@ -105,12 +116,12 @@
     function renderTable(rows) {
       elTbody.innerHTML = "";
       const frag = document.createDocumentFragment();
+      const cols = ["isbn","도서명","저자명","도서명(저자명)","출판사","발행년도","조회결과","비고"];
       for (const r of rows) {
         const tr = document.createElement("tr");
-        const cols = ["isbn","도서명","저자명","도서명(저자명)","출판사","발행년도","조회결과","비고"];
         for (const c of cols) {
           const td = document.createElement("td");
-          td.textContent = r[c] ?? "";
+          td.textContent = r?.[c] ?? "";
           tr.appendChild(td);
         }
         frag.appendChild(tr);
@@ -131,38 +142,162 @@
       `;
     }
 
+    function addSummary(a, b) {
+      return {
+        total: (a.total ?? 0) + (b.total ?? 0),
+        success: (a.success ?? 0) + (b.success ?? 0),
+        notFound: (a.notFound ?? 0) + (b.notFound ?? 0),
+        failed: (a.failed ?? 0) + (b.failed ?? 0),
+        invalid: (a.invalid ?? 0) + (b.invalid ?? 0),
+      };
+    }
+
+    function makeFailRow(isbn, reason) {
+      return {
+        isbn: isbn ?? "",
+        "도서명": "",
+        "저자명": "",
+        "도서명(저자명)": "",
+        "출판사": "",
+        "발행년도": "",
+        "조회결과": "실패",
+        "비고": reason ?? "",
+      };
+    }
+
+    // ✅ 멈춤 방지: fetch 자체 타임아웃
+    async function fetchWithTimeout(url, options = {}, timeoutMs = CHUNK_TIMEOUT_MS) {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } finally {
+        clearTimeout(id);
+      }
+    }
+
+    // ✅ JSON이 아닐 때도 원인 확인 가능
+    async function readJsonSafely(res) {
+      const text = await res.text();
+      if (!text) return { ok: false, error: `빈 응답(HTTP ${res.status})` };
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { ok: false, error: `JSON 아님(HTTP ${res.status}): ${text.slice(0, 200)}` };
+      }
+    }
+
+    function chunkArray(arr, size) {
+      const chunks = [];
+      for (let i = 0; i < arr.length; i += size) {
+        chunks.push(arr.slice(i, i + size));
+      }
+      return chunks;
+    }
+
     btnLookup.addEventListener("click", async () => {
-      const chunkSize = 25;  // ✅ 25개씩
-const all = parseIsbns(elInput.value).slice(0, 500);
+      if (isRunning) return;
 
-const chunks = [];
-for (let i = 0; i < all.length; i += chunkSize) {
-  chunks.push(all.slice(i, i + chunkSize));
-}
+      const all = parseIsbns(elInput.value).slice(0, MAX_ISBNS);
+      if (all.length === 0) return;
 
-lastResults = [];
-renderTable([]);
-renderSummary(null);
+      const chunks = chunkArray(all, CHUNK_SIZE);
 
-for (let ci = 0; ci < chunks.length; ci++) {
-  elProgress.textContent = `조회 중... (${ci + 1}/${chunks.length})`;
+      // UI 초기화
+      isRunning = true;
+      btnLookup.disabled = true;
+      btnDownload.disabled = true;
+      btnClear.disabled = true;
+      elProgress.textContent = "조회 준비...";
+      elDetail.textContent = "";
+      renderTable([]);
+      renderSummary(null);
 
-  const res = await fetch(API_ENDPOINT, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ isbns: chunks[ci] })
-  });
+      lastResults = [];
+      let runningSummary = { total: 0, success: 0, notFound: 0, failed: 0, invalid: 0 };
+      let doneCount = 0;
 
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.error || "unknown error");
+      try {
+        for (let ci = 0; ci < chunks.length; ci++) {
+          const chunk = chunks[ci];
+          elProgress.textContent = `조회 중... (${ci + 1}/${chunks.length})`;
+          elDetail.textContent = `진행: ${doneCount}/${all.length} 처리됨`;
 
-  // ✅ 결과 이어붙이기(행 순서 유지)
-  lastResults = lastResults.concat(data.results || []);
-  renderTable(lastResults);
-}
+          // ✅ 각 chunk 요청은 타임아웃이 걸림 (멈춤 방지)
+          let res;
+          try {
+            res = await fetchWithTimeout(
+              API_ENDPOINT,
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ isbns: chunk })
+              },
+              CHUNK_TIMEOUT_MS
+            );
+          } catch (e) {
+            // 타임아웃/연결 실패: 이 chunk는 행 단위 실패로 기록하고 계속 진행
+            const reason = `요청 시간 초과/연결 실패(프론트): ${String(e?.name || e).slice(0, 80)}`;
+            lastResults = lastResults.concat(chunk.map(isbn => makeFailRow(isbn, reason)));
+            runningSummary = addSummary(runningSummary, {
+              total: chunk.length, success: 0, notFound: 0, failed: chunk.length, invalid: 0
+            });
+            doneCount += chunk.length;
+            renderTable(lastResults);
+            renderSummary(runningSummary);
+            continue;
+          }
 
-elProgress.textContent = "완료";
-btnDownload.disabled = lastResults.length === 0;
+          const data = await readJsonSafely(res);
+
+          if (!res.ok || !data?.ok) {
+            // 서버가 4xx/5xx 또는 data.ok=false: 이 chunk 전체를 실패로 기록하고 계속
+            const reason = `서버 오류: ${data?.error || `HTTP ${res.status}`}`;
+            lastResults = lastResults.concat(chunk.map(isbn => makeFailRow(isbn, reason)));
+            runningSummary = addSummary(runningSummary, {
+              total: chunk.length, success: 0, notFound: 0, failed: chunk.length, invalid: 0
+            });
+            doneCount += chunk.length;
+            renderTable(lastResults);
+            renderSummary(runningSummary);
+            continue;
+          }
+
+          const rows = Array.isArray(data.results) ? data.results : [];
+          lastResults = lastResults.concat(rows);
+
+          // summary는 서버가 준 것을 누적 (없으면 결과로 추정)
+          if (data.summary) {
+            runningSummary = addSummary(runningSummary, data.summary);
+          } else {
+            // 추정(보수)
+            const s = {
+              total: rows.length,
+              success: rows.filter(r => r["조회결과"] === "성공").length,
+              notFound: rows.filter(r => r["조회결과"] === "미검색").length,
+              failed: rows.filter(r => r["조회결과"] === "실패").length,
+              invalid: rows.filter(r => r["조회결과"] === "형식오류").length,
+            };
+            runningSummary = addSummary(runningSummary, s);
+          }
+
+          doneCount += chunk.length;
+
+          // 중간 렌더링(사용자 체감 개선)
+          renderTable(lastResults);
+          renderSummary(runningSummary);
+        }
+
+        elProgress.textContent = "완료";
+        elDetail.textContent = `완료: ${doneCount}/${all.length} 처리됨`;
+        btnDownload.disabled = lastResults.length === 0;
+      } catch (e) {
+        elProgress.textContent = "오류";
+        alert(`조회 실패: ${e?.message || e}`);
+      } finally {
+        isRunning = false;
+        btnLookup.disabled = false;
+        btnClear.disabled = false;
       }
     });
 
@@ -172,7 +307,7 @@ btnDownload.disabled = lastResults.length === 0;
       const cols = ["isbn","도서명","저자명","도서명(저자명)","출판사","발행년도","조회결과","비고"];
       const rows = lastResults.map(r => {
         const o = {};
-        for (const c of cols) o[c] = r[c] ?? "";
+        for (const c of cols) o[c] = r?.[c] ?? "";
         return o;
       });
 
@@ -182,17 +317,19 @@ btnDownload.disabled = lastResults.length === 0;
 
       const today = new Date();
       const yyyy = today.getFullYear();
-      const mm = String(today.getMonth()+1).padStart(2,"0");
-      const dd = String(today.getDate()).padStart(2,"0");
+      const mm = String(today.getMonth() + 1).padStart(2, "0");
+      const dd = String(today.getDate()).padStart(2, "0");
       XLSX.writeFile(wb, `isbn_도서목록_${yyyy}-${mm}-${dd}.xlsx`);
     });
 
     btnClear.addEventListener("click", () => {
+      if (isRunning) return;
       elInput.value = "";
       updateCount();
       lastResults = [];
       renderTable([]);
       renderSummary(null);
+      elDetail.textContent = "";
       btnDownload.disabled = true;
       elProgress.textContent = "대기";
     });
