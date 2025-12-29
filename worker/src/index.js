@@ -189,22 +189,40 @@ async function fetchFromNldOrCache(normIsbn, env, ctx) {
   apiUrl.searchParams.set("page_size", "1");
   apiUrl.searchParams.set("isbn", normIsbn);
 
-  // ✅ 타임아웃+재시도 적용(핵심)
-  const res = await fetchWithRetry(apiUrl.toString(), { headers: { accept: "application/json" } }, 5000, 1);
+  let res;
+try {
+  res = await fetchWithRetry(
+    apiUrl.toString(),
+    { headers: { accept: "application/json" } },
+    3500,   // 타임아웃 3.5초 (권장)
+    2       // 재시도 2회 (총 3번 시도)
+  );
+} catch (e) {
+  const base = {
+    isbn: normIsbn,
+    title: "",
+    author: "",
+    publisher: "",
+    year: "",
+    status: "실패",
+    note: `API fetch 실패(타임아웃/연결): ${String(e?.message ?? e).slice(0, 160)}`,
+  };
+  return makeRow(base);
+}
 
-  if (!res.ok) {
-    const text = await safeText(res);
-    const base = {
-      isbn: normIsbn,
-      title: "",
-      author: "",
-      publisher: "",
-      year: "",
-      status: "실패",
-      note: `API 응답 오류: HTTP ${res.status}${text ? ` (${text.slice(0, 120)})` : ""}`,
-    };
-    return makeRow(base);
-  }
+if (!res.ok) {
+  const text = await safeText(res);
+  const base = {
+    isbn: normIsbn,
+    title: "",
+    author: "",
+    publisher: "",
+    year: "",
+    status: "실패",
+    note: `API 응답 오류: HTTP ${res.status}${text ? ` (${text.slice(0, 120)})` : ""}`,
+  };
+  return makeRow(base);
+}
 
   let jsonData;
   try {
