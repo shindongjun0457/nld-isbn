@@ -35,6 +35,7 @@
 
   <div class="row">
     <button id="btnLookup">조회</button>
+    <button id="btnRetryNotFound" disabled>미검색만 재조회</button>
     <button id="btnDownload" disabled>엑셀 다운로드</button>
     <button id="btnClear">초기화</button>
     <span class="badge" id="countBadge">0개</span>
@@ -77,7 +78,7 @@
 
     // 대량 조회 안정화 파라미터
     const MAX_ISBNS = 500;
-    const CHUNK_SIZE = 25;        // 25개씩 분할 호출
+    const CHUNK_SIZE = 25;          // 25개씩 분할 호출
     const CHUNK_TIMEOUT_MS = 20000; // 각 chunk 요청 20초 제한 (멈춤 방지)
 
     const elInput = document.getElementById("input");
@@ -88,6 +89,7 @@
     const elDetail = document.getElementById("detail");
     const elTbody = document.querySelector("#table tbody");
     const btnLookup = document.getElementById("btnLookup");
+    const btnRetryNotFound = document.getElementById("btnRetryNotFound");
     const btnDownload = document.getElementById("btnDownload");
     const btnClear = document.getElementById("btnClear");
 
@@ -195,6 +197,10 @@
       return chunks;
     }
 
+    function enableRetryButton() {
+      btnRetryNotFound.disabled = !lastResults.some(r => r["조회결과"] === "미검색");
+    }
+
     btnLookup.addEventListener("click", async () => {
       if (isRunning) return;
 
@@ -206,6 +212,7 @@
       // UI 초기화
       isRunning = true;
       btnLookup.disabled = true;
+      btnRetryNotFound.disabled = true;
       btnDownload.disabled = true;
       btnClear.disabled = true;
       elProgress.textContent = "조회 준비...";
@@ -291,6 +298,8 @@
         elProgress.textContent = "완료";
         elDetail.textContent = `완료: ${doneCount}/${all.length} 처리됨`;
         btnDownload.disabled = lastResults.length === 0;
+
+        enableRetryButton();
       } catch (e) {
         elProgress.textContent = "오류";
         alert(`조회 실패: ${e?.message || e}`);
@@ -298,6 +307,91 @@
         isRunning = false;
         btnLookup.disabled = false;
         btnClear.disabled = false;
+      }
+    });
+
+    // ✅ 미검색만 재조회: "덮어쓰기"로 순서 유지
+    btnRetryNotFound.addEventListener("click", async () => {
+      if (isRunning) return;
+
+      // 미검색 대상 + 인덱스 수집
+      const targets = [];
+      lastResults.forEach((row, index) => {
+        if (row["조회결과"] === "미검색") {
+          targets.push({ isbn: row.isbn, index });
+        }
+      });
+
+      if (targets.length === 0) {
+        alert("미검색 항목이 없습니다.");
+        btnRetryNotFound.disabled = true;
+        return;
+      }
+
+      isRunning = true;
+      btnLookup.disabled = true;
+      btnRetryNotFound.disabled = true;
+      btnDownload.disabled = true;
+      btnClear.disabled = true;
+
+      const retryIsbns = targets.map(t => t.isbn);
+      const chunks = chunkArray(retryIsbns, CHUNK_SIZE);
+
+      let processed = 0;
+
+      try {
+        for (let ci = 0; ci < chunks.length; ci++) {
+          elProgress.textContent = `미검색 재조회 중... (${processed}/${targets.length})`;
+          elDetail.textContent = `미검색 재조회 진행: ${processed}/${targets.length}`;
+
+          let res;
+          try {
+            res = await fetchWithTimeout(
+              API_ENDPOINT,
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ isbns: chunks[ci] })
+              },
+              CHUNK_TIMEOUT_MS
+            );
+          } catch {
+            // 이 chunk는 실패로만 남기고 다음 진행 (순서 유지)
+            processed += chunks[ci].length;
+            continue;
+          }
+
+          const data = await readJsonSafely(res);
+          if (!res.ok || !data?.ok || !Array.isArray(data.results)) {
+            processed += chunks[ci].length;
+            continue;
+          }
+
+          // 🔥 덮어쓰기: lastResults의 "해당 인덱스"를 교체 (순서 100% 유지)
+          data.results.forEach(newRow => {
+            const t = targets.find(
+              x => x.isbn === newRow.isbn && lastResults[x.index]["조회결과"] === "미검색"
+            );
+            if (!t) return;
+            lastResults[t.index] = newRow;
+          });
+
+          processed += chunks[ci].length;
+
+          // 즉시 반영
+          renderTable(lastResults);
+        }
+
+        elProgress.textContent = "미검색 재조회 완료";
+        elDetail.textContent = `미검색 재조회 완료: ${targets.length}건`;
+        btnDownload.disabled = lastResults.length === 0;
+
+        enableRetryButton();
+      } finally {
+        isRunning = false;
+        btnLookup.disabled = false;
+        btnClear.disabled = false;
+        btnDownload.disabled = lastResults.length === 0;
       }
     });
 
@@ -331,6 +425,7 @@
       renderSummary(null);
       elDetail.textContent = "";
       btnDownload.disabled = true;
+      btnRetryNotFound.disabled = true;
       elProgress.textContent = "대기";
     });
   </script>
