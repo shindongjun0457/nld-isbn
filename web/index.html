@@ -5,67 +5,294 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>ISBN 서지정보 조회 (국립중앙도서관)</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; margin: 24px; }
-    h1 { margin: 0 0 12px; font-size: 20px; }
-    .help { color: #444; margin-bottom: 12px; line-height: 1.5; }
-    textarea { width: 100%; height: 180px; padding: 10px; box-sizing: border-box; }
-    .row { display: flex; gap: 8px; align-items: center; margin: 10px 0 16px; flex-wrap: wrap; }
-    button { padding: 8px 12px; cursor: pointer; }
-    button:disabled { opacity: 0.6; cursor: not-allowed; }
-    .badge { padding: 6px 10px; border: 1px solid #ccc; border-radius: 999px; }
-    .warn { color: #b00020; }
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-    th, td { border: 1px solid #ddd; padding: 8px; vertical-align: top; font-size: 13px; }
-    th { background: #f6f6f6; text-align: left; position: sticky; top: 0; }
-    .footer { margin-top: 10px; color: #666; font-size: 12px; }
-    .muted { color:#666; font-size:12px; }
+    :root{
+      --primary:#4f46e5;
+      --primary-hover:#4338ca;
+      --bg:#f8fafc;
+      --card-bg:#ffffff;
+      --text-main:#1e293b;
+      --text-muted:#64748b;
+      --border:#e2e8f0;
+      --soft:#f1f5f9;
+      --danger:#b00020;
+    }
+
+    *{box-sizing:border-box;margin:0;padding:0;}
+
+    body{
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans KR",sans-serif;
+      background:var(--bg);
+      color:var(--text-main);
+      min-height:100vh;
+      padding:20px;
+    }
+
+    /* 오른쪽 위 도구 버튼 */
+    .top-right{
+      position:fixed;
+      top:16px;
+      right:16px;
+      z-index:100;
+    }
+    .top-right a{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:10px 12px;
+      border-radius:999px;
+      text-decoration:none;
+      font-size:0.9rem;
+      font-weight:700;
+      background:#fff;
+      color:var(--text-main);
+      border:1px solid var(--border);
+      box-shadow:0 4px 10px rgba(0,0,0,0.06);
+      transition:background-color .2s,transform .1s,border-color .2s;
+    }
+    .top-right a:hover{background:var(--soft);border-color:#cbd5e1;}
+    .top-right a:active{transform:scale(.98);}
+
+    .container{
+      background:var(--card-bg);
+      width:100%;
+      max-width:980px;
+      margin:0 auto;
+      padding:2rem;
+      border-radius:1rem;
+      box-shadow:0 10px 25px -5px rgba(0,0,0,0.1),0 8px 10px -6px rgba(0,0,0,0.1);
+    }
+
+    header{
+      margin-bottom:1.5rem;
+      text-align:center;
+    }
+
+    h1{
+      font-size:1.6rem;
+      font-weight:800;
+      margin-bottom:.5rem;
+      letter-spacing:-0.02em;
+    }
+
+    .sub{
+      font-size:.9rem;
+      color:var(--text-muted);
+      line-height:1.5;
+    }
+
+    .grid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:14px;
+      margin-top:18px;
+    }
+
+    .input-group label{
+      display:block;
+      font-size:0.875rem;
+      font-weight:700;
+      margin-bottom:8px;
+    }
+
+    textarea{
+      width:100%;
+      height:180px;
+      padding:1rem;
+      border:1px solid var(--border);
+      border-radius:.75rem;
+      font-size:1rem;
+      line-height:1.5;
+      resize:vertical;
+      outline:none;
+      transition:border-color .2s, box-shadow .2s;
+      background:#fff;
+    }
+    textarea:focus{
+      border-color:var(--primary);
+      box-shadow:0 0 0 3px rgba(79,70,229,0.15);
+    }
+
+    .controls{
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+      align-items:center;
+      margin-top:12px;
+    }
+
+    .btn{
+      border:none;
+      border-radius:.75rem;
+      padding:.75rem 1rem;
+      font-size:1rem;
+      font-weight:700;
+      cursor:pointer;
+      transition:background-color .2s, transform .1s, opacity .2s;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:8px;
+    }
+    .btn:active{transform:scale(.98);}
+    .btn:disabled{opacity:.55;cursor:not-allowed;}
+
+    .btn-primary{background:var(--primary);color:#fff;}
+    .btn-primary:hover{background:var(--primary-hover);}
+
+    .btn-ghost{
+      background:#fff;
+      color:var(--text-main);
+      border:1px solid var(--border);
+    }
+    .btn-ghost:hover{
+      background:var(--soft);
+      border-color:#cbd5e1;
+    }
+
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:8px 10px;
+      border-radius:999px;
+      border:1px solid var(--border);
+      background:#fff;
+      font-size:.85rem;
+      color:var(--text-muted);
+      font-weight:700;
+    }
+
+    .warn{
+      color:var(--danger);
+      font-size:.85rem;
+      font-weight:700;
+    }
+
+    .summary{
+      margin-top:14px;
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+    }
+
+    .table-wrap{
+      margin-top:16px;
+      background:#fff;
+      border:1px solid var(--border);
+      border-radius:1rem;
+      overflow:hidden;
+    }
+
+    table{
+      width:100%;
+      border-collapse:collapse;
+      font-size:.9rem;
+    }
+
+    thead th{
+      position:sticky;
+      top:0;
+      background:var(--soft);
+      border-bottom:1px solid var(--border);
+      padding:12px 10px;
+      text-align:left;
+      font-size:.8rem;
+      letter-spacing:.02em;
+      text-transform:uppercase;
+      color:#475569;
+      z-index:1;
+    }
+
+    tbody td{
+      border-bottom:1px solid var(--border);
+      padding:10px;
+      vertical-align:top;
+      word-break:break-word;
+    }
+
+    tbody tr:hover td{
+      background:#fafafa;
+    }
+
+    .footer{
+      margin-top:12px;
+      color:var(--text-muted);
+      font-size:.8rem;
+      text-align:center;
+      line-height:1.5;
+    }
+
+    /* 작은 화면 대응 */
+    @media (max-width: 720px){
+      .container{padding:1.25rem;}
+      textarea{height:160px;}
+      .btn{width:100%;}
+      .pill{width:100%;justify-content:center;}
+      .top-right{top:12px;right:12px;}
+    }
   </style>
 </head>
 <body>
-  <h1>ISBN 서지정보 조회</h1>
-  <div class="help">
-    ISBN을 줄바꿈으로 여러 개 입력하세요. <b>한 번에 최대 500개</b>까지 처리됩니다.<br />
-    대량 조회 안정화를 위해 <b>25개씩 분할</b>해 순차 조회합니다.
+
+  <!-- 오른쪽 위: 나이스 입력양식 변환기 -->
+  <div class="top-right">
+    <a href="/tools/book-list-converter.html" title="나이스 입력양식 변환기">나이스 입력양식 변환기</a>
   </div>
 
-  <textarea id="input" placeholder="예)
+  <div class="container">
+    <header>
+      <h1>📚 ISBN 서지정보 조회</h1>
+      <div class="sub">
+        ISBN을 줄바꿈으로 여러 개 입력하면, 국립중앙도서관 서지정보 API로 도서 정보를 가져옵니다.<br/>
+        한 번에 최대 <b>500개</b>까지 처리됩니다.
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="input-group">
+        <label for="input">ISBN 입력 (한 줄에 하나)</label>
+        <textarea id="input" placeholder="예)
 9788972598435
 9791189799908
 ..."></textarea>
 
-  <div class="row">
-    <button id="btnLookup">조회</button>
-    <button id="btnRetryNotFound" disabled>미검색만 재조회</button>
-    <button id="btnDownload" disabled>엑셀 다운로드</button>
-    <button id="btnClear">초기화</button>
-    <span class="badge" id="countBadge">0개</span>
-    <span class="badge" id="progressBadge">대기</span>
-    <span class="warn" id="warnText"></span>
-  </div>
+        <div class="controls">
+          <button id="btnLookup" class="btn btn-primary">조회</button>
+          <button id="btnRetryNotFound" class="btn btn-ghost" disabled>미검색만 재조회</button>
+          <button id="btnDownload" class="btn btn-ghost" disabled>엑셀 다운로드</button>
+          <button id="btnClear" class="btn btn-ghost">초기화</button>
 
-  <div id="summary"></div>
-  <div class="muted" id="detail"></div>
+          <span class="pill" id="countBadge">0개</span>
+          <span class="pill" id="progressBadge">대기</span>
+          <span class="warn" id="warnText"></span>
+        </div>
 
-  <div style="overflow:auto; max-height: 60vh;">
-    <table id="table">
-      <thead>
-        <tr>
-          <th>isbn</th>
-          <th>도서명</th>
-          <th>저자명</th>
-          <th>도서명(저자명)</th>
-          <th>출판사</th>
-          <th>발행년도</th>
-          <th>조회결과</th>
-          <th>비고</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
+        <div class="summary" id="summary"></div>
+        <div class="sub" id="detail" style="margin-top:8px;"></div>
+      </div>
 
-  <div class="footer">
-    백엔드(Worker)에서만 국립중앙도서관 API를 호출합니다. 프론트에는 인증키가 포함되지 않습니다.
+      <div class="table-wrap" style="max-height: 60vh; overflow:auto;">
+        <table id="table">
+          <thead>
+            <tr>
+              <th>isbn</th>
+              <th>도서명</th>
+              <th>저자명</th>
+              <th>도서명(저자명)</th>
+              <th>출판사</th>
+              <th>발행년도</th>
+              <th>조회결과</th>
+              <th>비고</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="footer">
+        백엔드(Worker)에서만 국립중앙도서관 API를 호출합니다. 프론트에는 인증키가 포함되지 않습니다.
+      </div>
+    </div>
   </div>
 
   <!-- SheetJS (xlsx) -->
@@ -73,13 +300,11 @@
 
   <script>
     // ====== 설정 ======
-    // 배포된 Worker API로 고정 (필요 시 본인 URL로 변경)
     let API_ENDPOINT = "https://nld-isbn-lookup.djshin0457.workers.dev/api/isbn";
 
-    // 대량 조회 안정화 파라미터
     const MAX_ISBNS = 500;
-    const CHUNK_SIZE = 25;          // 25개씩 분할 호출
-    const CHUNK_TIMEOUT_MS = 20000; // 각 chunk 요청 20초 제한 (멈춤 방지)
+    const CHUNK_SIZE = 25;
+    const CHUNK_TIMEOUT_MS = 20000;
 
     const elInput = document.getElementById("input");
     const elCount = document.getElementById("countBadge");
@@ -97,7 +322,6 @@
     let isRunning = false;
 
     function parseIsbns(text) {
-      // 줄바꿈/쉼표/공백 혼합 허용
       return text
         .split(/\s+|,/g)
         .map(s => s.trim())
@@ -134,13 +358,11 @@
     function renderSummary(summary) {
       if (!summary) { elSummary.innerHTML = ""; return; }
       elSummary.innerHTML = `
-        <div class="row" style="margin: 0 0 8px;">
-          <span class="badge">총 ${summary.total}건</span>
-          <span class="badge">성공 ${summary.success}</span>
-          <span class="badge">미검색 ${summary.notFound}</span>
-          <span class="badge">실패 ${summary.failed}</span>
-          <span class="badge">형식오류 ${summary.invalid}</span>
-        </div>
+        <span class="pill">총 ${summary.total}건</span>
+        <span class="pill">성공 ${summary.success}</span>
+        <span class="pill">미검색 ${summary.notFound}</span>
+        <span class="pill">실패 ${summary.failed}</span>
+        <span class="pill">형식오류 ${summary.invalid}</span>
       `;
     }
 
@@ -167,7 +389,6 @@
       };
     }
 
-    // ✅ 멈춤 방지: fetch 자체 타임아웃
     async function fetchWithTimeout(url, options = {}, timeoutMs = CHUNK_TIMEOUT_MS) {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -178,7 +399,6 @@
       }
     }
 
-    // ✅ JSON이 아닐 때도 원인 확인 가능
     async function readJsonSafely(res) {
       const text = await res.text();
       if (!text) return { ok: false, error: `빈 응답(HTTP ${res.status})` };
@@ -209,12 +429,12 @@
 
       const chunks = chunkArray(all, CHUNK_SIZE);
 
-      // UI 초기화
       isRunning = true;
       btnLookup.disabled = true;
       btnRetryNotFound.disabled = true;
       btnDownload.disabled = true;
       btnClear.disabled = true;
+
       elProgress.textContent = "조회 준비...";
       elDetail.textContent = "";
       renderTable([]);
@@ -230,7 +450,6 @@
           elProgress.textContent = `조회 중... (${ci + 1}/${chunks.length})`;
           elDetail.textContent = `진행: ${doneCount}/${all.length} 처리됨`;
 
-          // ✅ 각 chunk 요청은 타임아웃이 걸림 (멈춤 방지)
           let res;
           try {
             res = await fetchWithTimeout(
@@ -243,8 +462,7 @@
               CHUNK_TIMEOUT_MS
             );
           } catch (e) {
-            // 타임아웃/연결 실패: 이 chunk는 행 단위 실패로 기록하고 계속 진행
-            const reason = `요청 시간 초과/연결 실패(프론트): ${String(e?.name || e).slice(0, 80)}`;
+            const reason = `요청 시간 초과/연결 실패: ${String(e?.name || e).slice(0, 80)}`;
             lastResults = lastResults.concat(chunk.map(isbn => makeFailRow(isbn, reason)));
             runningSummary = addSummary(runningSummary, {
               total: chunk.length, success: 0, notFound: 0, failed: chunk.length, invalid: 0
@@ -258,7 +476,6 @@
           const data = await readJsonSafely(res);
 
           if (!res.ok || !data?.ok) {
-            // 서버가 4xx/5xx 또는 data.ok=false: 이 chunk 전체를 실패로 기록하고 계속
             const reason = `서버 오류: ${data?.error || `HTTP ${res.status}`}`;
             lastResults = lastResults.concat(chunk.map(isbn => makeFailRow(isbn, reason)));
             runningSummary = addSummary(runningSummary, {
@@ -273,11 +490,9 @@
           const rows = Array.isArray(data.results) ? data.results : [];
           lastResults = lastResults.concat(rows);
 
-          // summary는 서버가 준 것을 누적 (없으면 결과로 추정)
           if (data.summary) {
             runningSummary = addSummary(runningSummary, data.summary);
           } else {
-            // 추정(보수)
             const s = {
               total: rows.length,
               success: rows.filter(r => r["조회결과"] === "성공").length,
@@ -289,16 +504,14 @@
           }
 
           doneCount += chunk.length;
-
-          // 중간 렌더링(사용자 체감 개선)
           renderTable(lastResults);
           renderSummary(runningSummary);
         }
 
         elProgress.textContent = "완료";
         elDetail.textContent = `완료: ${doneCount}/${all.length} 처리됨`;
-        btnDownload.disabled = lastResults.length === 0;
 
+        btnDownload.disabled = lastResults.length === 0;
         enableRetryButton();
       } catch (e) {
         elProgress.textContent = "오류";
@@ -307,14 +520,13 @@
         isRunning = false;
         btnLookup.disabled = false;
         btnClear.disabled = false;
+        btnDownload.disabled = lastResults.length === 0;
       }
     });
 
-    // ✅ 미검색만 재조회: "덮어쓰기"로 순서 유지
     btnRetryNotFound.addEventListener("click", async () => {
       if (isRunning) return;
 
-      // 미검색 대상 + 인덱스 수집
       const targets = [];
       lastResults.forEach((row, index) => {
         if (row["조회결과"] === "미검색") {
@@ -356,7 +568,6 @@
               CHUNK_TIMEOUT_MS
             );
           } catch {
-            // 이 chunk는 실패로만 남기고 다음 진행 (순서 유지)
             processed += chunks[ci].length;
             continue;
           }
@@ -367,7 +578,6 @@
             continue;
           }
 
-          // 🔥 덮어쓰기: lastResults의 "해당 인덱스"를 교체 (순서 100% 유지)
           data.results.forEach(newRow => {
             const t = targets.find(
               x => x.isbn === newRow.isbn && lastResults[x.index]["조회결과"] === "미검색"
@@ -377,15 +587,13 @@
           });
 
           processed += chunks[ci].length;
-
-          // 즉시 반영
           renderTable(lastResults);
         }
 
         elProgress.textContent = "미검색 재조회 완료";
         elDetail.textContent = `미검색 재조회 완료: ${targets.length}건`;
-        btnDownload.disabled = lastResults.length === 0;
 
+        btnDownload.disabled = lastResults.length === 0;
         enableRetryButton();
       } finally {
         isRunning = false;

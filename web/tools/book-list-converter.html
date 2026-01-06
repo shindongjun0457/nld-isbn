@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>도서 목록 변환기</title>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            background-color: var(--card-bg);
+            width: 100%;
+            max-width: 600px;
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+        }
+
+        header {
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            color: var(--text-main);
+        }
+
+        p {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .input-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        textarea {
+            width: 100%;
+            height: 180px;
+            padding: 1rem;
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            line-height: 1.5;
+            resize: vertical;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        textarea:focus {
+            border-color: var(--primary);
+            ring: 2px solid var(--primary);
+        }
+
+        .button-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.1s;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+        }
+
+        button:hover {
+            background-color: var(--primary-hover);
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        .result-section {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background-color: #f1f5f9;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .result-title {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+        }
+
+        #output {
+            font-size: 0.95rem;
+            line-height: 1.6;
+            word-break: break-all;
+            white-space: pre-wrap;
+            color: var(--text-main);
+        }
+
+        .message-box {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #1e293b;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            display: none;
+            z-index: 50;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .empty-state {
+            color: #94a3b8;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>📚 도서 목록 변환기</h1>
+        <p>여러 줄로 된 도서 목록을 한 줄로 변환합니다.</p>
+    </header>
+
+    <div class="input-group">
+        <label for="input-text">입력 (한 줄에 한 권씩)</label>
+        <textarea id="input-text" placeholder="예:&#10;통일한국 제1고등학교(전성희)&#10;뉴스툰 1: 동아시아(뉴스툰)"></textarea>
+    </div>
+
+    <div class="button-group">
+        <button id="convert-btn">변환 및 클립보드 복사</button>
+    </div>
+
+    <div class="result-section">
+        <div class="result-header">
+            <span class="result-title">변환 결과</span>
+        </div>
+        <div id="output" class="empty-state">내용을 입력하고 버튼을 눌러주세요.</div>
+    </div>
+</div>
+
+<div id="toast" class="message-box">클립보드에 복사되었습니다!</div>
+
+<script>
+    const inputArea = document.getElementById('input-text');
+    const outputArea = document.getElementById('output');
+    const convertBtn = document.getElementById('convert-btn');
+    const toast = document.getElementById('toast');
+
+    function showToast(message) {
+        toast.innerText = message;
+        toast.style.display = 'block';
+        setTimeout(() => {
+            toast.style.display = 'none';
+        }, 2000);
+    }
+
+    function transform() {
+        const text = inputArea.value;
+        if (!text.trim()) {
+            outputArea.innerHTML = '<span class="empty-state">내용을 입력하고 버튼을 눌러주세요.</span>';
+            return "";
+        }
+
+        // 줄바꿈으로 나누고, 각 줄 앞뒤 공백 제거 후 빈 줄은 제외
+        const lines = text.split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0);
+
+        // ", "로 연결
+        const result = lines.join(', ');
+        outputArea.innerText = result;
+        outputArea.classList.remove('empty-state');
+        return result;
+    }
+
+    function copyToClipboard(text) {
+        if (!text) return;
+
+        // navigator.clipboard.writeText 가 지원되지 않는 환경을 고려한 fallback
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            showToast("✅ 클립보드에 복사되었습니다!");
+        } catch (err) {
+            showToast("❌ 복사에 실패했습니다.");
+        }
+        document.body.removeChild(textArea);
+    }
+
+    convertBtn.addEventListener('click', () => {
+        const result = transform();
+        if (result) {
+            copyToClipboard(result);
+        } else {
+            showToast("⚠️ 입력된 내용이 없습니다.");
+        }
+    });
+
+    // 실시간 미리보기 (선택 사항)
+    inputArea.addEventListener('input', transform);
+</script>
+
+</body>
+</html>
