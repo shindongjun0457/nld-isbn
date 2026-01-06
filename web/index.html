@@ -35,22 +35,33 @@
       z-index:100;
     }
     .top-right a{
-      display:inline-flex;
-      align-items:center;
-      gap:8px;
-      padding:10px 12px;
-      border-radius:999px;
-      text-decoration:none;
-      font-size:0.9rem;
-      font-weight:700;
-      background:#fff;
-      color:var(--text-main);
-      border:1px solid var(--border);
-      box-shadow:0 4px 10px rgba(0,0,0,0.06);
-      transition:background-color .2s,transform .1s,border-color .2s;
-    }
-    .top-right a:hover{background:var(--soft);border-color:#cbd5e1;}
-    .top-right a:active{transform:scale(.98);}
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:10px 14px;
+  border-radius:999px;
+  text-decoration:none;
+  font-size:0.9rem;
+  font-weight:800;
+
+  /* ✅ 파란색 강조 */
+  background: var(--primary);
+  color: #ffffff;
+  border: 1px solid var(--primary);
+
+  box-shadow: 0 6px 14px rgba(79,70,229,0.35);
+  transition: background-color .2s, transform .1s, box-shadow .2s;
+}
+
+.top-right a:hover{
+  background: var(--primary-hover);
+  box-shadow: 0 8px 18px rgba(67,56,202,0.45);
+}
+
+.top-right a:active{
+  transform: scale(.97);
+}
+
 
     .container{
       background:var(--card-bg);
