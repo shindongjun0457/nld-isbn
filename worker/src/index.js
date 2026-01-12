@@ -131,16 +131,117 @@ function clampInt(v, min, max, def) {
   return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
+// =======================
+// AUTHOR NORMALIZATION (START)
+// =======================
+
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isLikelyPersonName(s) {
+  if (!s) return false;
+  const t = String(s).trim();
+
+  if (t.length < 2 || t.length > 30) return false;
+  if (/[0-9]/.test(t)) return false;
+
+  // 역할 단어가 남아있으면 제외(2차 안전장치)
+  if (/(지음|글|그림|옮김|번역|역자|감수|편저|엮음|해설|기획)/.test(t)) return false;
+
+  // 한글 이름(공백 포함 가능)
+  const koreanOk =
+    /^[가-힣\s·.・]+$/.test(t) &&
+    t.replace(/\s/g, "").length >= 2 &&
+    t.replace(/\s/g, "").length <= 8;
+
+  // 영문 이름
+  const englishOk = /^[A-Za-z][A-Za-z .'-]*[A-Za-z]$/.test(t);
+
+  return koreanOk || englishOk;
+}
+
+/**
+ * authorRaw(문자열) → { authorName, authorShort, count }
+ * - authorName: 표의 "저자명" (정리된 이름들, 쉼표)
+ * - authorShort: "도서명(저자명)" 괄호용: "첫이름" 또는 "첫이름 외"
+ */
+function normalizeAuthors(authorRaw) {
+  let s = String(authorRaw ?? "").replace(/\u00A0/g, " ").trim();
+  if (!s) return { authorName: "", authorShort: "", count: 0 };
+
+  // 괄호/대괄호/중괄호 부가정보 제거
+  s = s.replace(/\([^)]*\)/g, " ");
+  s = s.replace(/\[[^\]]*\]/g, " ");
+  s = s.replace(/\{[^}]*\}/g, " ");
+
+  // 구분자 통일
+  s = s
+    .replace(/[\u00B7·•]/g, ",")
+    .replace(/[;|/]/g, ",")
+    .replace(/\s+(and|AND|And)\s+/g, ",")
+    .replace(/\s*&\s*/g, ",");
+
+  // 역할/행위 표기 제거
+  const roleWords = [
+    "지음","씀","저","저자","저술","글","글쓴이","원저","원작","저작",
+    "그림","삽화","사진","만화","일러스트","일러스트레이션","그린이",
+    "옮김","옮긴이","번역","역","역자","편역",
+    "감수","감역","감독",
+    "편","편집","편저","엮음","엮은이","편찬",
+    "해설","기획","구성","감수자","역해"
+  ];
+  const rolePattern = new RegExp(`\\s*(?:${roleWords.map(escapeRegExp).join("|")})\\s*`, "g");
+  s = s.replace(rolePattern, " ");
+
+  // "지은이: 홍길동" 형태 등 콜론 앞 역할 제거
+  s = s.replace(/(지은이|저자|글쓴이)\s*:\s*/g, "");
+
+  s = s.replace(/\s+/g, " ").trim();
+
+  // 후보 분리
+  let parts = s.split(",").map(x => x.trim()).filter(Boolean);
+
+  // 접두/접미 정리
+  parts = parts.map(p => {
+    p = p.replace(/^(저자|저|지은이|글쓴이|저술자)\s*/g, "");
+    p = p.replace(/\s*(외|등)$/g, "");
+    return p.trim();
+  }).filter(Boolean);
+
+  const people = parts.filter(isLikelyPersonName);
+  if (people.length === 0) return { authorName: "", authorShort: "", count: 0 };
+
+  const first = people[0];
+  return {
+    authorName: people.join(", "),
+    authorShort: people.length >= 2 ? `${first} 외` : first,
+    count: people.length
+  };
+}
+
+// =======================
+// AUTHOR NORMALIZATION (END)
+// =======================
+
+
 function makeRow({ isbn, title, author, publisher, year, status, note }) {
-  const authorDisplay = formatAuthorDisplay(author);
-  const titleAuthor = title
-    ? `${title}(${authorDisplay || "저자미상"})`
-    : "";
+  const normA = normalizeAuthors(author);
+
+// "저자명"은 정규화된 이름들(가능하면 깔끔하게)
+const authorName = normA.authorName;
+
+// "도서명(저자명)" 괄호 안은 반드시 "사람이름" 또는 "사람이름 외"만
+// 저자가 없으면 괄호 자체를 생략(원치 않으면 "저자미상"으로 바꿀 수 있음)
+const titleAuthor = title
+  ? (normA.authorShort ? `${title}(${normA.authorShort})` : title)
+  : "";
+
 
   return {
     isbn: isbn ?? "",
     "도서명": title ?? "",
-    "저자명": author ?? "",
+    "저자명": authorName ?? "",
     "도서명(저자명)": titleAuthor,
     "출판사": publisher ?? "",
     "발행년도": year ?? "",
