@@ -189,7 +189,8 @@ function normalizeAuthors(authorRaw) {
     "옮김","옮긴이","번역","역","역자","편역",
     "감수","감역","감독",
     "편","편집","편저","엮음","엮은이","편찬",
-    "해설","기획","구성","감수자","역해"
+    "해설","기획","구성","감수자","역해",
+    "글그림","글.그림","글·그림","글/그림","글ㆍ그림","글,그림"
   ];
   const rolePattern = new RegExp(`\\s*(?:${roleWords.map(escapeRegExp).join("|")})\\s*`, "g");
   s = s.replace(rolePattern, " ");
